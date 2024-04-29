@@ -58,11 +58,6 @@ class WebSocketClient:
         self.cache_buffer = b''
         self.reader_buffer = b''
 
-    #async def __aenter__(self):
-    #    return await self.connect()
-    #async def __aexit__(self, exc_type, exc_val, exc_tb):
-    #    return None
-
     def isConnected(self):
         return self.open
 
@@ -180,94 +175,60 @@ class WebSocketClient:
 
         await self.sock.sendall(s)
 
-    async def flush(self ,data):
-        self.cache_buffer += data
-
-    async def handle(self):
-
-        if len(self.cache_buffer) < 2:
-            return
-
-        frame_head = self.cache_buffer[0]
-        FIN = frame_head >> 7
-        opcode = frame_head & 0b1111
-        payload_len = self.cache_buffer[1] & 0b1111111
-        per_message_compressed = frame_head >> 6 & 1
-        try:
-            if payload_len < 126:
-                n = 2
-                msg_len = payload_len
-                msg = self.cache_buffer[n:n + msg_len]
-                self.cache_buffer = self.cache_buffer[n + msg_len:]
-            elif payload_len == 126:
-                n = 4
-                msg_len = struct.unpack('!H', self.cache_buffer[2:n])[0]
-                msg = self.cache_buffer[n:n + msg_len]
-                self.cache_buffer = self.cache_buffer[n + msg_len:]
-            else:
-                n = 10
-                msg_len = struct.unpack('!Q', self.cache_buffer[2:n])[0]
-                msg = self.cache_buffer[n:n + msg_len]
-                self.cache_buffer = self.cache_buffer[n + msg_len:]
-
-        except Exception:
-            return
-        
-        while len(msg) < msg_len:
-            #数据长度不足,缓存中的数据还属于当前帧,继续读取
-            d = await self.sock.recv(msg_len)
-            msg += d
-
-        self.cache_buffer += msg[msg_len:]
-        msg = msg[:msg_len]
-        print(f'msg:{msg}', flush=True)
-        if per_message_compressed:
-            msg = zlib.decompressobj(-zlib.MAX_WBITS).decompress(msg)
-
-        if opcode == 0x00:
-            self.reader_buffer += msg
-        elif opcode == 0x01:
-            self.reader_buffer += msg
-        elif opcode == 0x02:
-            self.reader_buffer += msg
-        elif opcode == 0x08:
-            self.open = False
-            await self.close()
-            raise WebSocketClosed(f'webscoket Closed')
-
-        elif opcode == 0x9:
-            # 收到ping,发送pong
-
-            await self.send(msg, binary=False, opc=0xA)
-
-        elif opcode == 0xA:
-            # pong
-            pass
-
-        if FIN == 1:
-            reader_buffer = self.reader_buffer
-            self.reader_buffer = b''
-            return reader_buffer
-
-        else:
-            pass
     async def recv(self):
+        """Receive messages as an asynchronous generator."""
+        try:
+            while self.open:
+                if len(self.cache_buffer) < 2:
+                    data = await self.sock.recv(2**14)
+                    if not data:
+                        break
+                    self.cache_buffer += data
 
-        while 1:
-            #握手过程产生的缓存数据
-            result = self.cache_buffer
+                if len(self.cache_buffer) >= 2:
+                    frame_head = self.cache_buffer[0]
+                    FIN = frame_head >> 7
+                    opcode = frame_head & 0b1111
+                    payload_len = self.cache_buffer[1] & 0b1111111
 
-            if result:
-                self.cache_buffer = b''
-                return result
-            try:
-                data = await self.sock.recv(2 ** 14)
-            except Exception:
-                self.open = False
-                raise WebSocketClosed('webscoket Closed')
-            else:
-                await self.flush(data)
+                    if payload_len < 126:
+                        header_size = 2
+                    elif payload_len == 126:
+                        if len(self.cache_buffer) < 4:
+                            continue
+                        payload_len, = struct.unpack('!H', self.cache_buffer[2:4])
+                        header_size = 4
+                    else:
+                        if len(self.cache_buffer) < 10:
+                            continue
+                        payload_len, = struct.unpack('!Q', self.cache_buffer[2:10])
+                        header_size = 10
 
+                    total_frame_size = header_size + payload_len
+
+                    if len(self.cache_buffer) < total_frame_size:
+                        continue
+
+                    msg = self.cache_buffer[header_size:total_frame_size]
+                    self.cache_buffer = self.cache_buffer[total_frame_size:]
+
+                    if opcode == 0x1 or opcode == 0x2:  # Text or Binary Frame
+                        if FIN:
+                            if opcode == 0x1:  # Text frame
+                                yield msg.decode('utf-8')
+                            else:  # Binary frame
+                                yield msg
+                    elif opcode == 0x8:  # Close Frame
+                        self.open = False
+                        await self.close()
+                        break
+                    elif opcode == 0x9:  # Ping Frame
+                        await self.send(msg, binary=True, opc=0xA)  # Send Pong
+        except Exception as e:
+            print(f"Error during WebSocket communication: {e}")
+        finally:
+            await self.close()
+            print("WebSocket connection has been closed.")
 
     async def loop_ping(self):
         while self.open:

@@ -11,21 +11,14 @@ async def main():
         'Sec-WebSocket-Extensions': 'permessage-deflate',
     }
     sockClient = WebSocketClient(url=url, headers=headers)
-    
     try:
         if await sockClient.connect():
             print('Connected successfully')
-            try:
-                while await sockClient.isConnected():
-                    message = await sockClient.recv()
-                    print(message)
-                    await asyncio.sleep(0.1)
-            except Exception as e:
-                print(f"Error receiving data: {e}")
-        else:
-            print('Failed to connect!')
+            async for message in sockClient.recv():
+                print(message)
+                await asyncio.sleep(0.1)  # Slow down the loop if necessary
     except Exception as e:
-        print(f"Error connecting to WebSocket: {e}")
+        print(f"Error while handling WebSocket connection: {e}")
     finally:
         await sockClient.close()
         print("Connection closed.")
