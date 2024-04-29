@@ -1,0 +1,12 @@
+Brotli==1.1.0
+cffi==1.16.0
+cryptography==36.0.1
+hpack==4.0.0
+pyasn1==0.6.0
+pycparser==2.22
+pyhttpx==2.10.12
+pyOpenSSL==21.0.0
+PySocks==1.7.1
+rsa==4.8
+six==1.16.0
+urllib3==2.2.1
